@@ -1,40 +1,43 @@
 package main
 
 import (
-	"context"
-	"log"
-	"time"
+	"fmt"
 
-	"github.com/segmentio/kafka-go"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
-type DriverLocation struct {
-	DriverID  int     `json:"driver_id"`
-	Latitude  float64 `json:"latitude"`
-	Longitude float64 `json:"longitude"`
-}
-
 func main() {
-	// to produce messages
-	topic := "test-topic"
-	partition := 0
 
-	conn, err := kafka.DialLeader(context.Background(), "tcp", "127.0.0.1:9092", topic, partition)
+	p, err := kafka.NewProducer(&kafka.ConfigMap{"bootstrap.servers": "localhost"})
 	if err != nil {
-		log.Fatal("failed to dial leader:", err)
+		panic(err)
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_, err = conn.WriteMessages(
-		kafka.Message{Value: []byte("one!")},
-		kafka.Message{Value: []byte("two!")},
-		kafka.Message{Value: []byte("three!")},
-	)
-	if err != nil {
-		log.Fatal("failed to write messages:", err)
+	defer p.Close()
+
+	// Delivery report handler for produced messages
+	go func() {
+		for e := range p.Events() {
+			switch ev := e.(type) {
+			case *kafka.Message:
+				if ev.TopicPartition.Error != nil {
+					fmt.Printf("Delivery failed: %v\n", ev.TopicPartition)
+				} else {
+					fmt.Printf("Delivered message to %v\n", ev.TopicPartition)
+				}
+			}
+		}
+	}()
+
+	// Produce messages to topic (asynchronously)
+	topic := "myTopic"
+	for _, word := range []string{"Welcome", "to", "the", "Confluent", "Kafka", "Golang", "client"} {
+		p.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+			Value:          []byte(word),
+		}, nil)
 	}
 
-	if err := conn.Close(); err != nil {
-		log.Fatal("failed to close writer:", err)
-	}
+	// Wait for message deliveries before shutting down
+	p.Flush(15 * 1000)
 }
